@@ -33,6 +33,7 @@ go.work.sum
 
 # Test artifacts
 artifacts/
-journal
+# Binary (only match at root, not internal/journal/)
+/journal
 # Added by goreleaser init:
 dist/
