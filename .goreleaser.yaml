@@ -8,16 +8,15 @@
 
 version: 2
 
+before:
+  hooks:
+    # You may remove this if you don't use go modules.
+    - go mod tidy
+
 builds:
-  - main: ./main.go
-    binary: journal
-    goos:
+  - goos:
       - linux
       - darwin
-      - windows
-    goarch:
-      - amd64
-      - arm64
 
 archives:
   - formats: [tar.gz]

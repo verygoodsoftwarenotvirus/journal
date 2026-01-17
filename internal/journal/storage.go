@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"time"
 )
 
 // GetJournalPath returns the journal base path, checking environment variable first
@@ -71,3 +73,61 @@ func LoadEntry(filePath string) (*Entry, error) {
 	return &entry, nil
 }
 
+// FindMostRecentEntry finds the most recent journal entry by scanning the journal directory
+func FindMostRecentEntry() (*Entry, string, error) {
+	basePath := GetJournalPath()
+	
+	// Check if the journal directory exists
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		return nil, "", fmt.Errorf("journal directory does not exist: %s", basePath)
+	}
+	
+	var entries []struct {
+		entry    *Entry
+		filePath string
+		time     time.Time
+	}
+	
+	// Walk through the directory structure: year/month/day/*.json
+	err := filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		
+		// Only process JSON files
+		if !info.IsDir() && filepath.Ext(path) == ".json" {
+			entry, err := LoadEntry(path)
+			if err != nil {
+				// Skip files that can't be loaded
+				return nil
+			}
+			
+			entries = append(entries, struct {
+				entry    *Entry
+				filePath string
+				time     time.Time
+			}{
+				entry:    entry,
+				filePath: path,
+				time:     entry.PublishTime,
+			})
+		}
+		
+		return nil
+	})
+	
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to scan journal directory: %w", err)
+	}
+	
+	if len(entries) == 0 {
+		return nil, "", fmt.Errorf("no journal entries found")
+	}
+	
+	// Sort by time, most recent first
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].time.After(entries[j].time)
+	})
+	
+	return entries[0].entry, entries[0].filePath, nil
+}
