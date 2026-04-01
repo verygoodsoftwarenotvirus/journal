@@ -36,3 +36,5 @@ artifacts/
 journal
 # Added by goreleaser init:
 dist/
+
+.idea/

@@ -25,36 +25,36 @@ func GetJournalPath() string {
 // SaveEntry saves a journal entry to the filesystem
 func SaveEntry(entry *Entry) error {
 	basePath := GetJournalPath()
-	
+
 	// Create directory structure: year/month/day
 	now := entry.PublishTime
 	year := fmt.Sprintf("%04d", now.Year())
 	month := fmt.Sprintf("%02d", int(now.Month()))
 	day := fmt.Sprintf("%02d", now.Day())
-	
+
 	dirPath := filepath.Join(basePath, year, month, day)
-	
+
 	// Create directories if they don't exist
 	if err := os.MkdirAll(dirPath, 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
-	
+
 	// Create filename with timestamp
 	timestamp := now.Format("20060102-150405")
 	filename := fmt.Sprintf("%s.json", timestamp)
 	filePath := filepath.Join(dirPath, filename)
-	
+
 	// Marshal entry to JSON
 	jsonData, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal entry: %w", err)
 	}
-	
+
 	// Write to file
 	if err := os.WriteFile(filePath, jsonData, 0644); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -64,36 +64,36 @@ func LoadEntry(filePath string) (*Entry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
-	
+
 	var entry Entry
 	if err := json.Unmarshal(data, &entry); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal entry: %w", err)
 	}
-	
+
 	return &entry, nil
 }
 
 // FindMostRecentEntry finds the most recent journal entry by scanning the journal directory
 func FindMostRecentEntry() (*Entry, string, error) {
 	basePath := GetJournalPath()
-	
+
 	// Check if the journal directory exists
 	if _, err := os.Stat(basePath); os.IsNotExist(err) {
 		return nil, "", fmt.Errorf("journal directory does not exist: %s", basePath)
 	}
-	
+
 	var entries []struct {
 		entry    *Entry
 		filePath string
 		time     time.Time
 	}
-	
+
 	// Walk through the directory structure: year/month/day/*.json
 	err := filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		
+
 		// Only process JSON files
 		if !info.IsDir() && filepath.Ext(path) == ".json" {
 			entry, err := LoadEntry(path)
@@ -101,7 +101,7 @@ func FindMostRecentEntry() (*Entry, string, error) {
 				// Skip files that can't be loaded
 				return nil
 			}
-			
+
 			entries = append(entries, struct {
 				entry    *Entry
 				filePath string
@@ -112,22 +112,75 @@ func FindMostRecentEntry() (*Entry, string, error) {
 				time:     entry.PublishTime,
 			})
 		}
-		
+
 		return nil
 	})
-	
+
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to scan journal directory: %w", err)
 	}
-	
+
 	if len(entries) == 0 {
 		return nil, "", fmt.Errorf("no journal entries found")
 	}
-	
+
 	// Sort by time, most recent first
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].time.After(entries[j].time)
 	})
-	
+
 	return entries[0].entry, entries[0].filePath, nil
+}
+
+// FindLastNEntries returns the N most recent journal entries, sorted newest first.
+// Returns fewer than n entries if the journal has fewer than n entries.
+func FindLastNEntries(n int) ([]*Entry, error) {
+	basePath := GetJournalPath()
+
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("journal directory does not exist: %s", basePath)
+	}
+
+	var entries []struct {
+		entry *Entry
+		time  time.Time
+	}
+
+	err := filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && filepath.Ext(path) == ".json" {
+			entry, err := LoadEntry(path)
+			if err != nil {
+				return nil
+			}
+			entries = append(entries, struct {
+				entry *Entry
+				time  time.Time
+			}{
+				entry: entry,
+				time:  entry.PublishTime,
+			})
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan journal directory: %w", err)
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].time.After(entries[j].time)
+	})
+
+	count := n
+	if len(entries) < count {
+		count = len(entries)
+	}
+	result := make([]*Entry, count)
+	for i := 0; i < count; i++ {
+		result[i] = entries[i].entry
+	}
+	return result, nil
 }

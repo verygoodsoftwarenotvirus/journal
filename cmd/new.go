@@ -2,13 +2,17 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/verygoodsoftwarenotvirus/journal/internal/journal"
+	"github.com/verygoodsoftwarenotvirus/journal/internal/llm"
 )
 
 var (
@@ -75,11 +79,22 @@ var newCmd = &cobra.Command{
 					content = strings.Join(lines, "\n")
 				} else {
 					// Stdin is a terminal, open editor
+					initialContent := ""
+					if llm.CredentialsPresent() {
+						questions, err := fetchFollowUpQuestions()
+						if err != nil {
+							// Log but don't fail - user can still write without questions
+							fmt.Fprintf(os.Stderr, "Note: could not fetch follow-up questions: %v\n", err)
+						} else if questions != "" {
+							initialContent = "\n\n---\n\nFollow-up questions from your last entries:\n\n" + strings.TrimSpace(questions) + "\n"
+						}
+					}
 					var err error
-					content, err = openEditor()
+					content, err = openEditor(initialContent)
 					if err != nil {
 						return fmt.Errorf("failed to open editor: %w", err)
 					}
+					content = extractJournalContent(content)
 				}
 			} else {
 				content = contentFlag
@@ -103,8 +118,38 @@ var newCmd = &cobra.Command{
 	},
 }
 
-// openEditor opens the user's editor (or vim) and returns the content
-func openEditor() (string, error) {
+// fetchFollowUpQuestions fetches follow-up questions from the LLM based on the last 3 entries.
+// Returns empty string on any error.
+func fetchFollowUpQuestions() (string, error) {
+	entries, err := journal.FindLastNEntries(3)
+	if err != nil || len(entries) == 0 {
+		return "", err
+	}
+
+	provider, err := llm.NewProvider()
+	if err != nil {
+		return "", err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	return provider.AskFollowUpQuestions(ctx, entries)
+}
+
+// extractJournalContent returns the journal entry content, stripping any content
+// below the "---" separator (e.g., follow-up questions).
+func extractJournalContent(edited string) string {
+	if idx := strings.Index(edited, "\n---"); idx >= 0 {
+		return strings.TrimRight(edited[:idx], "\n\r ")
+	}
+	return edited
+}
+
+// openEditor opens the user's editor (or vim) and returns the content.
+// If initialContent is non-empty, it is written to the temp file before opening
+// so the user sees it (e.g., follow-up questions at the bottom).
+func openEditor(initialContent string) (string, error) {
 	// Get editor from environment, default to vim
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
@@ -119,11 +164,24 @@ func openEditor() (string, error) {
 	tmpPath := tmpfile.Name()
 	defer os.Remove(tmpPath) // Clean up temp file
 
+	if initialContent != "" {
+		if _, err := tmpfile.WriteString(initialContent); err != nil {
+			tmpfile.Close()
+			return "", fmt.Errorf("failed to write initial content: %w", err)
+		}
+	}
+
 	// Close the file so editor can open it
 	tmpfile.Close()
 
-	// Open editor
-	cmd := exec.Command(editor, tmpPath)
+	// Build editor command, enabling word wrap for vim/nvim
+	args := []string{}
+	if strings.Contains(filepath.Base(editor), "vim") {
+		args = append(args, "-c", "set wrap linebreak")
+	}
+	args = append(args, tmpPath)
+
+	cmd := exec.Command(editor, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
